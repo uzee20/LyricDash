@@ -7,20 +7,32 @@ const { Server } = require("socket.io");
 const PORT = process.env.PORT || 3000;
 const ROOT = path.resolve(__dirname, "..");
 const FRONTEND_ROOT = path.join(ROOT, "frontend");
+const UPLOADS_ROOT = path.join(ROOT, "uploads");
+const MAX_AUDIO_UPLOAD_BYTES = 8 * 1024 * 1024;
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".json": "application/json; charset=utf-8",
+  ".mp3": "audio/mpeg",
+  ".wav": "audio/wav",
+  ".ogg": "audio/ogg",
+  ".m4a": "audio/mp4",
 };
 
 const rooms = new Map();
 const playerSockets = new Map();
 
+fs.mkdirSync(UPLOADS_ROOT, { recursive: true });
+
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(payload));
+}
+
+function sanitizeFilename(filename) {
+  return filename.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 
 function createRoomCode() {
@@ -62,7 +74,14 @@ function summarizeRoom(room) {
       totalWords: player.totalWords,
       combo: player.combo,
     })),
-    assets: room.assets,
+    assets: room.assets
+      ? {
+          audioName: room.assets.audioName,
+          audioType: room.assets.audioType,
+          audioUrl: room.assets.audioUrl,
+          lrcText: room.assets.lrcText,
+        }
+      : null,
     matchStateLabel: room.matchStateLabel,
   };
 }
@@ -84,13 +103,45 @@ function readBody(req) {
   });
 }
 
+function readBinaryBody(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let totalBytes = 0;
+
+    req.on("data", (chunk) => {
+      totalBytes += chunk.length;
+      if (totalBytes > maxBytes) {
+        reject(new Error("Ukuran audio melebihi batas 8 MB."));
+        req.destroy();
+        return;
+      }
+
+      chunks.push(chunk);
+    });
+
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
+function deleteFileIfExists(filePath) {
+  if (!filePath) {
+    return;
+  }
+
+  fs.promises.unlink(filePath).catch(() => {});
+}
+
 function serveStatic(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const requestedPath = url.pathname === "/" ? "/index.html" : url.pathname;
-  const normalizedPath = requestedPath.replace(/^\/+/, "");
-  const filePath = path.join(FRONTEND_ROOT, normalizedPath);
+  const baseDirectory = requestedPath.startsWith("/uploads/") ? UPLOADS_ROOT : FRONTEND_ROOT;
+  const normalizedPath = requestedPath.startsWith("/uploads/")
+    ? requestedPath.replace(/^\/uploads\/+/, "")
+    : requestedPath.replace(/^\/+/, "");
+  const filePath = path.join(baseDirectory, normalizedPath);
 
-  if (!filePath.startsWith(FRONTEND_ROOT)) {
+  if (!filePath.startsWith(baseDirectory)) {
     res.writeHead(403);
     res.end("Forbidden");
     return;
@@ -123,7 +174,7 @@ async function handleApi(req, res) {
   if (req.method === "POST" && url.pathname === "/api/rooms") {
     try {
       const body = JSON.parse(await readBody(req));
-      if (!body.playerName || !body.audioDataUrl || !body.lrcText) {
+      if (!body.playerName || !body.audioUrl || !body.audioFilePath || !body.lrcText) {
         return sendJson(res, 400, { message: "Data room belum lengkap." });
       }
 
@@ -135,7 +186,8 @@ async function handleApi(req, res) {
         assets: {
           audioName: body.audioName || "shared-audio",
           audioType: body.audioType || "audio/mpeg",
-          audioDataUrl: body.audioDataUrl,
+          audioUrl: body.audioUrl,
+          audioFilePath: body.audioFilePath,
           lrcText: body.lrcText,
         },
         matchStateLabel: "Lobby",
@@ -174,6 +226,27 @@ async function handleApi(req, res) {
       });
     } catch (error) {
       return sendJson(res, 400, { message: error.message || "Gagal gabung room." });
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/uploads/audio") {
+    try {
+      const originalName = sanitizeFilename(req.headers["x-file-name"] || "audio.bin");
+      const fileExtension = path.extname(originalName) || ".bin";
+      const storedName = `${crypto.randomUUID()}${fileExtension}`;
+      const filePath = path.join(UPLOADS_ROOT, storedName);
+      const audioBuffer = await readBinaryBody(req, MAX_AUDIO_UPLOAD_BYTES);
+
+      await fs.promises.writeFile(filePath, audioBuffer);
+
+      return sendJson(res, 201, {
+        audioName: originalName,
+        audioType: req.headers["content-type"] || "application/octet-stream",
+        audioUrl: `/uploads/${storedName}`,
+        audioFilePath: filePath,
+      });
+    } catch (error) {
+      return sendJson(res, 400, { message: error.message || "Gagal mengunggah audio." });
     }
   }
 
@@ -230,6 +303,7 @@ function removePlayer(playerId) {
     }
 
     if (room.players.length === 0) {
+      deleteFileIfExists(room.assets?.audioFilePath);
       rooms.delete(roomCode);
     } else {
       broadcastRoomState(room);

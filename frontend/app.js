@@ -188,10 +188,10 @@ function resetGameStats() {
 }
 
 function resetAssets() {
-  if (state.audioUrl) {
+  if (state.audioUrl && state.audioUrl.startsWith("blob:")) {
     URL.revokeObjectURL(state.audioUrl);
-    state.audioUrl = "";
   }
+  state.audioUrl = "";
 
   state.assets = null;
   state.lyrics = [];
@@ -289,29 +289,30 @@ function normalizeWord(word) {
 }
 
 function toDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error(`Gagal membaca file ${file.name}.`));
-    reader.readAsDataURL(file);
-  });
+  return file.arrayBuffer();
 }
 
 async function prepareSharedAssets(assetBundle) {
-  resetAssets();
-  state.assets = assetBundle;
-  state.lyrics = parseLrc(assetBundle.lrcText);
+  const hasSameAudio = state.assets?.audioUrl === assetBundle.audioUrl;
+  const hasLoadedLyrics = state.lyrics.length > 0;
 
-  if (!state.lyrics.length) {
-    throw new Error("Lirik room tidak valid.");
+  if (!hasSameAudio || !hasLoadedLyrics) {
+    resetAssets();
+    state.assets = assetBundle;
+    state.lyrics = parseLrc(assetBundle.lrcText);
+
+    if (!state.lyrics.length) {
+      throw new Error("Lirik room tidak valid.");
+    }
+
+    state.audioUrl = assetBundle.audioUrl;
+    audioPlayer.src = assetBundle.audioUrl;
+    audioPlayer.load();
+    resetGameStats();
+    return;
   }
 
-  const response = await fetch(assetBundle.audioDataUrl);
-  const audioBlob = await response.blob();
-  state.audioUrl = URL.createObjectURL(audioBlob);
-  audioPlayer.src = state.audioUrl;
-  audioPlayer.load();
-  resetGameStats();
+  state.assets = assetBundle;
 }
 
 function renderPlayers() {
@@ -476,7 +477,12 @@ async function launchGame() {
 }
 
 function connectSocket() {
-  if (state.ws && state.connected) {
+  if (state.ws) {
+    if (state.connected) {
+      return;
+    }
+
+    state.ws.connect();
     return;
   }
 
@@ -486,20 +492,24 @@ function connectSocket() {
   state.ws.on("connect", () => {
     state.connected = true;
     updateConnectionUi();
+    if (state.roomCode && state.playerId) {
+      sendSocketMessage({
+        type: "register_player",
+        roomCode: state.roomCode,
+        playerId: state.playerId,
+      });
+      setStatus("Koneksi pulih. Menyambungkan ulang ke room...");
+      return;
+    }
+
     setStatus("Server lokal terhubung. Sekarang kamu bisa membuat atau masuk room.");
   });
 
   state.ws.on("disconnect", () => {
     state.connected = false;
-    state.roomCode = "";
-    state.playerId = "";
-    state.players = [];
-    state.role = "";
-    state.isHost = false;
     matchStatePill.textContent = "Terputus";
     updateRoomUi();
-    resetAssets();
-    setStatus("Koneksi WebSocket terputus. Sambungkan ulang ke server.");
+    setStatus("Koneksi WebSocket terputus. Game lokal tetap berjalan, mencoba menyambung ulang...");
   });
 
   state.ws.on("room_created", async (payload) => {
@@ -536,7 +546,9 @@ async function handleSocketMessage(payload) {
     state.players = payload.room.players;
     matchStatePill.textContent = "Lobby";
     await prepareSharedAssets(payload.room.assets);
-    setScreen("lobby");
+    if (!state.gameStarted) {
+      setScreen("lobby");
+    }
     updateRoomUi();
     setStatus(`Room ${state.roomCode} berhasil dibuat. Bagikan kode room ke pemain lain.`);
     return;
@@ -550,7 +562,9 @@ async function handleSocketMessage(payload) {
     state.players = payload.room.players;
     matchStatePill.textContent = "Lobby";
     await prepareSharedAssets(payload.room.assets);
-    setScreen("lobby");
+    if (!state.gameStarted) {
+      setScreen("lobby");
+    }
     updateRoomUi();
     setStatus(`Berhasil masuk ke room ${state.roomCode}. Menunggu host memulai match.`);
     return;
@@ -600,12 +614,26 @@ async function createRoom() {
 
   try {
     createRoomButton.disabled = true;
-    setStatus("Membaca file dan membuat room...");
+    setStatus("Mengunggah audio dan membuat room...");
 
-    const [audioDataUrl, lrcText] = await Promise.all([
+    const [audioBuffer, lrcText] = await Promise.all([
       toDataUrl(audioFile),
       lrcFile.text(),
     ]);
+
+    const uploadResponse = await fetch("/api/uploads/audio", {
+      method: "POST",
+      headers: {
+        "Content-Type": audioFile.type || "application/octet-stream",
+        "X-File-Name": audioFile.name,
+      },
+      body: audioBuffer,
+    });
+
+    const uploadPayload = await uploadResponse.json();
+    if (!uploadResponse.ok) {
+      throw new Error(uploadPayload.message || "Gagal mengunggah audio.");
+    }
 
     const response = await fetch("/api/rooms", {
       method: "POST",
@@ -616,7 +644,8 @@ async function createRoom() {
         playerName: name,
         audioName: audioFile.name,
         audioType: audioFile.type || "audio/mpeg",
-        audioDataUrl,
+        audioUrl: uploadPayload.audioUrl,
+        audioFilePath: uploadPayload.audioFilePath,
         lrcText,
       }),
     });
