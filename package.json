@@ -1,0 +1,12 @@
+{
+  "name": "lyricdash-arena",
+  "version": "1.0.0",
+  "description": "LyricDash Arena multiplayer with Node.js and Socket.io",
+  "main": "backend/server.js",
+  "scripts": {
+    "start": "node backend/server.js"
+  },
+  "dependencies": {
+    "socket.io": "^4.8.1"
+  }
+}

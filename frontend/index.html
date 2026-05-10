@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LyricDash Multiplayer</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <section class="hero screen screen-lobby">
+      <p class="eyebrow">WebSocket Multiplayer Typing Rhythm Game</p>
+      <h1>LyricDash Arena</h1>
+      <p class="hero-copy">
+        Host mengunggah lagu dan lirik, pemain lain masuk ke room yang sama,
+        lalu semua mengetik secara sinkron dengan leaderboard real-time.
+      </p>
+    </section>
+
+    <section id="lobbyScreen" class="lobby-layout screen screen-lobby">
+      <article class="panel lobby-panel">
+        <h2>Lobby</h2>
+
+        <div class="field-group">
+          <label for="playerName">Nama pemain</label>
+          <input id="playerName" type="text" maxlength="24" placeholder="Contoh: Raka">
+        </div>
+
+        <div class="button-row single-column">
+          <button id="connectButton" type="button">Hubungkan ke Server</button>
+        </div>
+
+        <div class="status-block">
+          <span class="status-label">Status koneksi</span>
+          <strong id="connectionStatus">Belum terhubung</strong>
+        </div>
+
+        <div class="divider"></div>
+
+        <h3>Buat Room</h3>
+        <div class="field-group">
+          <label for="audioFile">File audio</label>
+          <input id="audioFile" type="file" accept="audio/*">
+        </div>
+        <div class="field-group">
+          <label for="lrcFile">File lirik LRC</label>
+          <input id="lrcFile" type="file" accept=".lrc,text/plain">
+        </div>
+        <div class="button-row">
+          <button id="createRoomButton" type="button" disabled>Buat Room</button>
+          <button id="startMatchButton" type="button" disabled>Start Match</button>
+        </div>
+
+        <div class="divider"></div>
+
+        <h3>Masuk Room</h3>
+        <div class="field-group">
+          <label for="roomCodeInput">Kode room</label>
+          <input id="roomCodeInput" type="text" maxlength="6" placeholder="Contoh: A7K2P9">
+        </div>
+        <div class="button-row single-column">
+          <button id="joinRoomButton" type="button" disabled>Gabung Room</button>
+        </div>
+
+        <div class="room-meta">
+          <div>
+            <span>Kode Room</span>
+            <strong id="roomCodeValue">-</strong>
+          </div>
+          <div>
+            <span>Peran</span>
+            <strong id="roleValue">-</strong>
+          </div>
+        </div>
+
+        <p id="statusMessage" class="status-message">
+          Sambungkan dulu ke server lokal, lalu buat atau gabung room.
+        </p>
+      </article>
+
+      <article class="panel room-panel">
+        <div class="room-header">
+          <div>
+            <h2>Room Players</h2>
+            <p id="roomSummary">Belum ada room aktif.</p>
+          </div>
+          <div class="pill" id="matchStatePill">Menunggu</div>
+        </div>
+
+        <div id="playersList" class="players-list">
+          <p class="empty-state">Daftar pemain akan muncul di sini.</p>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="countdown-card">
+          <span>Countdown</span>
+          <strong id="countdownValue">-</strong>
+        </div>
+      </article>
+    </section>
+
+    <section id="gameScreen" class="dashboard screen screen-game hidden">
+      <article class="panel stats-grid">
+        <div class="stat-card">
+          <span>Skor</span>
+          <strong id="scoreValue">0</strong>
+        </div>
+        <div class="stat-card">
+          <span>Combo</span>
+          <strong id="comboValue">0</strong>
+        </div>
+        <div class="stat-card">
+          <span>Akurasi</span>
+          <strong id="accuracyValue">100%</strong>
+        </div>
+        <div class="stat-card">
+          <span>Kata Selesai</span>
+          <strong id="progressValue">0 / 0</strong>
+        </div>
+      </article>
+
+      <article class="panel game-panel">
+        <div class="timeline">
+          <div id="timelineFill" class="timeline-fill"></div>
+        </div>
+        <div class="lyric-meta">
+          <p id="lineTimestamp">00:00.00</p>
+          <p id="lineCounter">Baris 0 / 0</p>
+        </div>
+
+        <div id="lyricDisplay" class="lyric-display">
+          <p class="empty-state">Game akan mulai setelah host menekan Start Match.</p>
+        </div>
+
+        <div class="typing-area">
+          <label for="typingInput">Ketik kata aktif</label>
+          <input
+            id="typingInput"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="Menunggu room aktif"
+            disabled
+          >
+        </div>
+
+        <div class="legend">
+          <span><i class="dot dot-done"></i>Selesai</span>
+          <span><i class="dot dot-active"></i>Aktif</span>
+          <span><i class="dot dot-upcoming"></i>Berikutnya</span>
+        </div>
+      </article>
+
+      <article class="panel leaderboard-panel">
+        <div class="leaderboard-header">
+          <h2>Leaderboard Live</h2>
+          <p>Update skor antar pemain via WebSocket.</p>
+        </div>
+        <div id="leaderboardList" class="leaderboard-list">
+          <p class="empty-state">Leaderboard akan tampil saat room aktif.</p>
+        </div>
+      </article>
+    </section>
+
+    <section id="resultScreen" class="panel result-screen screen screen-results hidden">
+      <div class="result-header">
+        <div>
+          <p class="eyebrow">Match Selesai</p>
+          <h2>Hasil Akhir</h2>
+        </div>
+        <button id="returnLobbyButton" type="button">Kembali ke Lobby</button>
+      </div>
+
+      <article class="winner-card">
+        <span>Pemenang</span>
+        <strong id="winnerName">-</strong>
+        <p id="winnerStats">Menunggu hasil pertandingan.</p>
+      </article>
+
+      <div class="result-grid">
+        <article class="panel final-standings-panel">
+          <h3>Final Standings</h3>
+          <div id="finalStandingsList" class="leaderboard-list">
+            <p class="empty-state">Hasil akhir akan muncul di sini.</p>
+          </div>
+        </article>
+        <article class="panel recap-panel">
+          <h3>Ringkasan Kamu</h3>
+          <div class="recap-stats">
+            <div>
+              <span>Skor</span>
+              <strong id="resultScoreValue">0</strong>
+            </div>
+            <div>
+              <span>Akurasi</span>
+              <strong id="resultAccuracyValue">100%</strong>
+            </div>
+            <div>
+              <span>Progress</span>
+              <strong id="resultProgressValue">0 / 0</strong>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel instructions screen screen-lobby">
+      <h2>Alur Main</h2>
+      <ol>
+        <li>Semua pemain membuka aplikasi dari server lokal yang sama.</li>
+        <li>Host mengisi nama, upload audio dan file <code>.lrc</code>, lalu klik <strong>Buat Room</strong>.</li>
+        <li>Pemain lain mengisi nama, memasukkan kode room, lalu klik <strong>Gabung Room</strong>.</li>
+        <li>Host menekan <strong>Start Match</strong> untuk countdown sinkron.</li>
+        <li>Skor dan posisi leaderboard diperbarui secara real-time selama permainan berjalan.</li>
+      </ol>
+    </section>
+  </main>
+
+  <audio id="audioPlayer" preload="auto"></audio>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
